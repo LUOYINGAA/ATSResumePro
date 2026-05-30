@@ -20,3 +20,76 @@
     scrollbar-width: none;
   }
 }
+
+/* ========== 专门针对打印/PDF导出的样式 ========== */
+@media print {
+  /* 隐藏所有非简历内容 */
+  body * {
+    visibility: hidden;
+  }
+  
+  /* 只显示简历容器 */
+  #resume-container,
+  #resume-container * {
+    visibility: visible;
+  }
+  
+  /* 强制页面设置 */
+  @page {
+    size: A4 portrait;
+    margin: 0;
+  }
+  
+  /* 确保简历容器占满页面 */
+  #resume-container {
+    width: 210mm !important;
+    min-height: 297mm !important;
+    height: 297mm !important;
+    margin: 0 !important;
+    padding: 15mm !important;
+    box-sizing: border-box !important;
+    box-shadow: none !important;
+    background: white !important;
+    position: fixed !important;
+    top: 0 !important;
+    left: 0 !important;
+  }
+  
+  /* 移除不必要的样式 */
+  #resume-container {
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
+  }
+  
+  /* 禁止打印链接URL */
+  a[href]:after {
+    content: none !important;
+  }
+  
+  /* 确保字体一致 */
+  body {
+    font-family: Arial, Helvetica, sans-serif !important;
+  }
+  
+  /* 防止自动分页 */
+  .page-break-inside-avoid,
+  #resume-container > div > div {
+    page-break-inside: avoid;
+  }
+  
+  /* 隐藏滚动条 */
+  ::-webkit-scrollbar {
+    display: none;
+  }
+  
+  /* 隐藏导航栏、按钮等非简历元素 */
+  .no-print {
+    display: none !important;
+  }
+
+  /* 确保没有多余的页面 */
+  html, body {
+    height: 100% !important;
+    overflow: hidden !important;
+  }
+}

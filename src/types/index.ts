@@ -65,6 +65,7 @@ export interface Template {
   id: string;
   name: string;
   category: string;
+  industry: string;
   style: string;
   colorScheme: string;
   free: boolean;

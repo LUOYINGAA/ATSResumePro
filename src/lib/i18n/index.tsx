@@ -25,15 +25,15 @@ export function I18nProvider({ children }: { children: React.ReactNode }) {
 
   useEffect(() => {
     const savedLang = localStorage.getItem("language") as Language;
-    if (savedLang && translations[savedLang]) {
+    if (savedLang && (translations as Record<string, TranslationKeys>)[savedLang]) {
       setLanguage(savedLang);
-      setT(translations[savedLang]);
+      setT((translations as Record<string, TranslationKeys>)[savedLang]);
     }
   }, []);
 
   const handleSetLanguage = (lang: Language) => {
     setLanguage(lang);
-    setT(translations[lang]);
+    setT((translations as Record<string, TranslationKeys>)[lang]);
     localStorage.setItem("language", lang);
   };
 

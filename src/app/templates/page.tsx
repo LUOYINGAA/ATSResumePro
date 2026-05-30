@@ -9,12 +9,12 @@ import LanguageSwitcher from "@/components/LanguageSwitcher";
 
 export default function TemplatesPage() {
   const { t } = useI18n();
-  const [selectedIndustry, setSelectedIndustry] = useState("All");
-  const [selectedStyle, setSelectedStyle] = useState("All");
+  const [selectedIndustry, setSelectedIndustry] = useState("全部");
+  const [selectedStyle, setSelectedStyle] = useState("全部");
 
   const filteredTemplates = TEMPLATES.filter((template) => {
-    const industryMatch = selectedIndustry === "All" || template.category === selectedIndustry;
-    const styleMatch = selectedStyle === "All" || template.style === selectedStyle;
+    const industryMatch = selectedIndustry === "全部" || template.industry === selectedIndustry;
+    const styleMatch = selectedStyle === "全部" || template.style === selectedStyle;
     return industryMatch && styleMatch;
   });
 

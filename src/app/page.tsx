@@ -18,10 +18,10 @@ import LanguageSwitcher from "@/components/LanguageSwitcher";
 
 export default function HomePage() {
   const { t } = useI18n();
-  const [selectedIndustry, setSelectedIndustry] = useState("Technology");
+  const [selectedIndustry, setSelectedIndustry] = useState("科技");
 
   const filteredTemplates = TEMPLATES.filter(
-    (t) => t.category === selectedIndustry || selectedIndustry === "All"
+    (t) => t.industry === selectedIndustry || selectedIndustry === "全部"
   );
 
   return (
@@ -186,9 +186,9 @@ export default function HomePage() {
 
           <div className="flex flex-wrap justify-center gap-2 mb-8">
             <button
-              onClick={() => setSelectedIndustry("All")}
+              onClick={() => setSelectedIndustry("全部")}
               className={`px-4 py-2 rounded-full text-sm font-medium transition-all ${
-                selectedIndustry === "All"
+                selectedIndustry === "全部"
                   ? "bg-primary-600 text-white"
                   : "bg-white text-slate-600 hover:bg-slate-100"
               }`}

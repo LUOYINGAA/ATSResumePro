@@ -11,6 +11,7 @@ import {
   Plus,
   Trash2,
   FileText,
+  ChevronDown,
 } from "lucide-react";
 import { ResumeData, ExperienceItem, EducationItem, ProjectItem, CertificationItem } from "@/types";
 import { TEMPLATES, ATS_KEYWORDS_BY_ROLE } from "@/lib/constants";
@@ -18,7 +19,8 @@ import { cn, generateId, formatDate, calculateAtsScore, checkAtsCompliance } fro
 import { useI18n } from "@/lib/i18n";
 import LanguageSwitcher from "@/components/LanguageSwitcher";
 import { jsPDF } from "jspdf";
-import { toPng } from "html-to-image";
+import html2canvas from "html2canvas";
+import { Document, Packer, Paragraph, TextRun, HeadingLevel, SectionType } from "docx";
 
 const INITIAL_DATA: ResumeData = {
   personal: {
@@ -103,20 +105,592 @@ export default function EditorPage({ params }: { params: { templateId: string } 
     setShowAtsCheck(true);
   };
 
-  const exportPDF = async () => {
-    if (!resumeRef.current) return;
+  const [showExportMenu, setShowExportMenu] = useState(false);
 
-    try {
-      const dataUrl = await toPng(resumeRef.current, { quality: 1 });
-      const pdf = new jsPDF({ unit: "pt", format: "a4" });
-      const imgProps = pdf.getImageProperties(dataUrl);
-      const pdfWidth = pdf.internal.pageSize.getWidth();
-      const pdfHeight = (imgProps.height * pdfWidth) / imgProps.width;
-      pdf.addImage(dataUrl, "PNG", 0, 0, pdfWidth, pdfHeight);
-      pdf.save(`${data.personal.firstName}_${data.personal.lastName}_Resume.pdf`);
-    } catch (err) {
-      console.error(err);
+  const exportPDF = () => {
+    setShowExportMenu(false);
+
+    const pdf = new jsPDF({
+      unit: "mm",
+      format: "a4",
+      orientation: "portrait",
+    });
+
+    const A4_WIDTH = 210;
+    const A4_HEIGHT = 297;
+    const MARGIN = 15;
+    const CONTENT_WIDTH = A4_WIDTH - MARGIN * 2;
+    const RIGHT_COL_WIDTH = 60;
+    const LEFT_COL_WIDTH = CONTENT_WIDTH - RIGHT_COL_WIDTH - 5;
+
+    const colors: Record<string, { primary: string; secondary: string }> = {
+      blue: { primary: "#2563eb", secondary: "#eff6ff" },
+      slate: { primary: "#475569", secondary: "#f1f5f9" },
+      teal: { primary: "#0891b2", secondary: "#f0fdfa" },
+      emerald: { primary: "#059669", secondary: "#ecfdf5" },
+      orange: { primary: "#ea580c", secondary: "#fff7ed" },
+    };
+
+    const colorScheme = colors[template.colorScheme] || colors.blue;
+    const PRIMARY_COLOR = colorScheme.primary;
+
+    let y = MARGIN;
+
+    const truncateText = (text: string, maxWidth: number, fontSize: number): string => {
+      pdf.setFontSize(fontSize);
+      let truncated = text;
+      while (pdf.getTextWidth(truncated) > maxWidth && truncated.length > 0) {
+        truncated = truncated.slice(0, -1);
+      }
+      if (truncated !== text && truncated.length > 0) {
+        truncated = truncated.slice(0, -3) + "...";
+      }
+      return truncated;
+    };
+
+    // Name
+    pdf.setFontSize(18);
+    pdf.setFont("Helvetica", "bold");
+    pdf.setTextColor(PRIMARY_COLOR);
+    const name = `${data.personal.firstName} ${data.personal.lastName}`;
+    const nameWidth = pdf.getTextWidth(name);
+    pdf.text(name, (A4_WIDTH - nameWidth) / 2, y);
+    y += 8;
+
+    // Title
+    pdf.setFontSize(12);
+    pdf.setFont("Helvetica", "normal");
+    pdf.setTextColor("#64748b");
+    const titleWidth = pdf.getTextWidth(data.personal.jobTitle);
+    pdf.text(data.personal.jobTitle, (A4_WIDTH - titleWidth) / 2, y);
+    y += 6;
+
+    // Contact
+    pdf.setFontSize(10);
+    pdf.setTextColor("#64748b");
+    const contactItems = [
+      data.personal.location,
+      data.personal.email,
+      data.personal.phone,
+      data.personal.linkedin,
+      data.personal.github,
+    ].filter(Boolean);
+    const contactText = contactItems.join(" | ");
+    const maxContactWidth = CONTENT_WIDTH;
+    const truncatedContact = truncateText(contactText, maxContactWidth, 10);
+    const contactX = (A4_WIDTH - pdf.getTextWidth(truncatedContact)) / 2;
+    pdf.text(truncatedContact, contactX, y);
+    y += 10;
+
+    // Line
+    pdf.setLineWidth(2);
+    pdf.setDrawColor(PRIMARY_COLOR);
+    pdf.line(MARGIN, y, A4_WIDTH - MARGIN, y);
+    y += 10;
+
+    // Summary
+    if (data.summary) {
+      pdf.setFontSize(12);
+      pdf.setFont("Helvetica", "bold");
+      pdf.setTextColor(PRIMARY_COLOR);
+      pdf.text("Professional Summary", MARGIN, y);
+      y += 6;
+
+      pdf.setFontSize(11);
+      pdf.setFont("Helvetica", "normal");
+      pdf.setTextColor("#475569");
+      const summaryLines = pdf.splitTextToSize(data.summary, CONTENT_WIDTH);
+      summaryLines.forEach((line: string) => {
+        pdf.text(line, MARGIN, y);
+        y += 5;
+      });
+      y += 8;
     }
+
+    // Experience
+    if (data.experience.length > 0) {
+      pdf.setFontSize(12);
+      pdf.setFont("Helvetica", "bold");
+      pdf.setTextColor(PRIMARY_COLOR);
+      pdf.text("Experience", MARGIN, y);
+      y += 6;
+
+      data.experience.forEach((exp) => {
+        if (y > A4_HEIGHT - MARGIN - 25) {
+          pdf.addPage();
+          y = MARGIN;
+        }
+
+        pdf.setFontSize(11);
+        pdf.setFont("Helvetica", "bold");
+        pdf.setTextColor("#1e293b");
+        const truncatedPosition = truncateText(exp.position, LEFT_COL_WIDTH, 11);
+        pdf.text(truncatedPosition, MARGIN, y);
+
+        pdf.setFontSize(10);
+        pdf.setFont("Helvetica", "normal");
+        pdf.setTextColor("#64748b");
+        const locationWidth = pdf.getTextWidth(exp.location);
+        const locationX = A4_WIDTH - MARGIN - locationWidth;
+        pdf.text(exp.location, locationX > MARGIN ? locationX : MARGIN + LEFT_COL_WIDTH + 5, y);
+        y += 5;
+
+        pdf.setFontSize(11);
+        pdf.setFont("Helvetica", "normal");
+        pdf.setTextColor("#475569");
+        const truncatedCompany = truncateText(exp.company, LEFT_COL_WIDTH, 11);
+        pdf.text(truncatedCompany, MARGIN, y);
+
+        const dateText = `${exp.startDate} - ${exp.isCurrent ? "Present" : exp.endDate}`;
+        const dateWidth = pdf.getTextWidth(dateText);
+        const dateX = A4_WIDTH - MARGIN - dateWidth;
+        pdf.setTextColor("#64748b");
+        pdf.setFontSize(10);
+        pdf.text(dateText, dateX > MARGIN ? dateX : MARGIN + LEFT_COL_WIDTH + 5, y);
+        y += 5;
+
+        pdf.setFontSize(10);
+        pdf.setTextColor("#475569");
+        exp.description.forEach((desc) => {
+          const descLines = pdf.splitTextToSize(`• ${desc}`, CONTENT_WIDTH);
+          descLines.forEach((line: string) => {
+            if (y > A4_HEIGHT - MARGIN - 20) {
+              pdf.addPage();
+              y = MARGIN;
+            }
+            pdf.text(line, MARGIN, y);
+            y += 4;
+          });
+        });
+        y += 6;
+      });
+      y += 6;
+    }
+
+    // Education
+    if (data.education.length > 0) {
+      if (y > A4_HEIGHT - MARGIN - 25) {
+        pdf.addPage();
+        y = MARGIN;
+      }
+
+      pdf.setFontSize(12);
+      pdf.setFont("Helvetica", "bold");
+      pdf.setTextColor(PRIMARY_COLOR);
+      pdf.text("Education", MARGIN, y);
+      y += 6;
+
+      data.education.forEach((edu) => {
+        if (y > A4_HEIGHT - MARGIN - 25) {
+          pdf.addPage();
+          y = MARGIN;
+        }
+
+        pdf.setFontSize(11);
+        pdf.setFont("Helvetica", "bold");
+        pdf.setTextColor("#1e293b");
+        const truncatedSchool = truncateText(edu.school, LEFT_COL_WIDTH, 11);
+        pdf.text(truncatedSchool, MARGIN, y);
+
+        pdf.setFontSize(10);
+        pdf.setFont("Helvetica", "normal");
+        pdf.setTextColor("#64748b");
+        const eduLocationWidth = pdf.getTextWidth(edu.location);
+        const eduLocationX = A4_WIDTH - MARGIN - eduLocationWidth;
+        pdf.text(edu.location, eduLocationX > MARGIN ? eduLocationX : MARGIN + LEFT_COL_WIDTH + 5, y);
+        y += 5;
+
+        pdf.setFontSize(11);
+        pdf.setFont("Helvetica", "normal");
+        pdf.setTextColor("#475569");
+        const degreeField = `${edu.degree} in ${edu.field}`;
+        const truncatedDegree = truncateText(degreeField, LEFT_COL_WIDTH, 11);
+        pdf.text(truncatedDegree, MARGIN, y);
+
+        const eduDateText = `${edu.startDate} - ${edu.endDate}`;
+        const eduDateWidth = pdf.getTextWidth(eduDateText);
+        const eduDateX = A4_WIDTH - MARGIN - eduDateWidth;
+        pdf.setTextColor("#64748b");
+        pdf.setFontSize(10);
+        pdf.text(eduDateText, eduDateX > MARGIN ? eduDateX : MARGIN + LEFT_COL_WIDTH + 5, y);
+        y += 5;
+
+        if (edu.gpa) {
+          pdf.setFontSize(10);
+          pdf.setTextColor("#64748b");
+          pdf.text(`GPA: ${edu.gpa}`, MARGIN, y);
+          y += 5;
+        }
+        y += 4;
+      });
+      y += 6;
+    }
+
+    // Skills
+    if (data.skills.length > 0) {
+      if (y > A4_HEIGHT - MARGIN - 25) {
+        pdf.addPage();
+        y = MARGIN;
+      }
+
+      pdf.setFontSize(12);
+      pdf.setFont("Helvetica", "bold");
+      pdf.setTextColor(PRIMARY_COLOR);
+      pdf.text("Skills", MARGIN, y);
+      y += 6;
+
+      pdf.setFontSize(10);
+      pdf.setFont("Helvetica", "normal");
+      pdf.setTextColor("#475569");
+
+      let currentX = MARGIN;
+      let lineHeight = 7;
+
+      data.skills.forEach((skill) => {
+        const skillWidth = pdf.getTextWidth(skill) + 8;
+        if (currentX + skillWidth > A4_WIDTH - MARGIN) {
+          currentX = MARGIN;
+          y += lineHeight;
+        }
+
+        pdf.setFillColor("#f1f5f9");
+        pdf.rect(currentX - 2, y - 4, skillWidth, lineHeight - 1, "F");
+        pdf.text(skill, currentX + 2, y);
+        currentX += skillWidth + 4;
+      });
+      y += lineHeight + 6;
+    }
+
+    // Projects
+    if (data.projects.length > 0) {
+      if (y > A4_HEIGHT - MARGIN - 25) {
+        pdf.addPage();
+        y = MARGIN;
+      }
+
+      pdf.setFontSize(12);
+      pdf.setFont("Helvetica", "bold");
+      pdf.setTextColor(PRIMARY_COLOR);
+      pdf.text("Projects", MARGIN, y);
+      y += 6;
+
+      data.projects.forEach((proj) => {
+        if (y > A4_HEIGHT - MARGIN - 25) {
+          pdf.addPage();
+          y = MARGIN;
+        }
+
+        pdf.setFontSize(11);
+        pdf.setFont("Helvetica", "bold");
+        pdf.setTextColor("#1e293b");
+        const truncatedTitle = truncateText(proj.title, LEFT_COL_WIDTH, 11);
+        pdf.text(truncatedTitle, MARGIN, y);
+        y += 5;
+
+        pdf.setFontSize(10);
+        pdf.setFont("Helvetica", "normal");
+        pdf.setTextColor("#475569");
+        const projDescLines = pdf.splitTextToSize(proj.description, CONTENT_WIDTH);
+        projDescLines.forEach((line: string) => {
+          pdf.text(line, MARGIN, y);
+          y += 4;
+        });
+
+        if (proj.technologies.length > 0) {
+          let techX = MARGIN;
+          proj.technologies.forEach((tech) => {
+            const techWidth = pdf.getTextWidth(tech) + 6;
+            if (techX + techWidth > A4_WIDTH - MARGIN) {
+              techX = MARGIN;
+              y += 5;
+            }
+            pdf.setFillColor("#e2e8f0");
+            pdf.rect(techX - 2, y - 3, techWidth, 5, "F");
+            pdf.setTextColor("#64748b");
+            pdf.setFontSize(9);
+            pdf.text(tech, techX, y);
+            techX += techWidth + 3;
+          });
+          y += 7;
+        }
+        y += 4;
+      });
+      y += 6;
+    }
+
+    // Certifications
+    if (data.certifications.length > 0) {
+      if (y > A4_HEIGHT - MARGIN - 25) {
+        pdf.addPage();
+        y = MARGIN;
+      }
+
+      pdf.setFontSize(12);
+      pdf.setFont("Helvetica", "bold");
+      pdf.setTextColor(PRIMARY_COLOR);
+      pdf.text("Certifications", MARGIN, y);
+      y += 6;
+
+      data.certifications.forEach((cert) => {
+        if (y > A4_HEIGHT - MARGIN - 25) {
+          pdf.addPage();
+          y = MARGIN;
+        }
+
+        pdf.setFontSize(11);
+        pdf.setFont("Helvetica", "bold");
+        pdf.setTextColor("#1e293b");
+        const truncatedCertName = truncateText(cert.name, CONTENT_WIDTH - 60, 11);
+        pdf.text(truncatedCertName, MARGIN, y);
+
+        if (cert.issuer || cert.date) {
+          const certInfo = [cert.issuer, cert.date].filter(Boolean).join(" | ");
+          pdf.setFontSize(10);
+          pdf.setFont("Helvetica", "normal");
+          pdf.setTextColor("#64748b");
+          pdf.text(certInfo, MARGIN, y + 5);
+          y += 5;
+        }
+        y += 5;
+      });
+    }
+
+    pdf.save(`${data.personal.firstName}_${data.personal.lastName}_Resume.pdf`);
+  };
+
+  const exportDOCX = async () => {
+    setShowExportMenu(false);
+
+    const paragraphs: any[] = [];
+    const marginCm = 2.54;
+    const marginTwips = marginCm * 567;
+
+    paragraphs.push(new Paragraph({
+      children: [
+        new TextRun({
+          text: `${data.personal.firstName} ${data.personal.lastName}`,
+          bold: true,
+          size: 28,
+        }),
+      ],
+      spacing: { after: 120 },
+      alignment: 'center',
+    }));
+
+    paragraphs.push(new Paragraph({
+      children: [new TextRun({ text: data.personal.jobTitle || '', size: 22 })],
+      spacing: { after: 200 },
+      alignment: 'center',
+    }));
+
+    const contactInfo = [];
+    if (data.personal.location) contactInfo.push(data.personal.location);
+    if (data.personal.email) contactInfo.push(data.personal.email);
+    if (data.personal.phone) contactInfo.push(data.personal.phone);
+    if (data.personal.linkedin) contactInfo.push(data.personal.linkedin);
+    if (data.personal.github) contactInfo.push(data.personal.github);
+    if (data.personal.website) contactInfo.push(data.personal.website);
+
+    paragraphs.push(new Paragraph({
+      children: [new TextRun({ text: contactInfo.join(' | '), size: 20 })],
+      spacing: { after: 280 },
+      alignment: 'center',
+    }));
+
+    if (data.summary) {
+      paragraphs.push(new Paragraph({
+        children: [new TextRun({ text: 'Professional Summary', bold: true, size: 22 })],
+        spacing: { after: 120 },
+        alignment: 'center',
+      }));
+      paragraphs.push(new Paragraph({
+        children: [new TextRun({ text: data.summary, size: 20 })],
+        spacing: { after: 280 },
+        alignment: 'center',
+      }));
+    }
+
+    if (data.experience.length > 0) {
+      paragraphs.push(new Paragraph({
+        children: [new TextRun({ text: 'Experience', bold: true, size: 22 })],
+        spacing: { after: 120 },
+        alignment: 'center',
+      }));
+
+      data.experience.forEach((exp) => {
+        paragraphs.push(new Paragraph({
+          children: [
+            new TextRun({ text: `${exp.position}`, bold: true, size: 20 }),
+            new TextRun({ text: ` - ${exp.company}`, size: 20 }),
+          ],
+          spacing: { after: 60 },
+          alignment: 'center',
+        }));
+
+        const expDates = `${formatDate(exp.startDate)} - ${exp.isCurrent ? 'Present' : formatDate(exp.endDate)}`;
+        paragraphs.push(new Paragraph({
+          children: [
+            new TextRun({ text: exp.location ? `${exp.location} | ` : '', size: 20 }),
+            new TextRun({ text: expDates, size: 20 }),
+          ],
+          spacing: { after: 100 },
+          alignment: 'center',
+        }));
+
+        exp.description.forEach((desc) => {
+          paragraphs.push(new Paragraph({
+            children: [new TextRun({ text: `• ${desc}`, size: 20 })],
+            spacing: { after: 60 },
+            alignment: 'center',
+          }));
+        });
+
+        paragraphs.push(new Paragraph({ spacing: { after: 160 } }));
+      });
+    }
+
+    if (data.education.length > 0) {
+      paragraphs.push(new Paragraph({
+        children: [new TextRun({ text: 'Education', bold: true, size: 22 })],
+        spacing: { after: 120 },
+        alignment: 'center',
+      }));
+
+      data.education.forEach((edu) => {
+        paragraphs.push(new Paragraph({
+          children: [
+            new TextRun({ text: `${edu.degree}`, bold: true, size: 20 }),
+            new TextRun({ text: ` - ${edu.school}`, size: 20 }),
+          ],
+          spacing: { after: 60 },
+          alignment: 'center',
+        }));
+
+        const eduDates = `${formatDate(edu.startDate)} - ${formatDate(edu.endDate)}`;
+        paragraphs.push(new Paragraph({
+          children: [
+            new TextRun({ text: edu.location ? `${edu.location} | ` : '', size: 20 }),
+            new TextRun({ text: eduDates, size: 20 }),
+          ],
+          spacing: { after: 60 },
+          alignment: 'center',
+        }));
+
+        if (edu.field) {
+          paragraphs.push(new Paragraph({
+            children: [new TextRun({ text: `${edu.field}`, size: 20 })],
+            spacing: { after: 60 },
+            alignment: 'center',
+          }));
+        }
+
+        if (edu.gpa) {
+          paragraphs.push(new Paragraph({
+            children: [new TextRun({ text: `GPA: ${edu.gpa}`, size: 20 })],
+            spacing: { after: 160 },
+            alignment: 'center',
+          }));
+        } else {
+          paragraphs.push(new Paragraph({ spacing: { after: 160 } }));
+        }
+      });
+    }
+
+    if (data.skills.length > 0) {
+      paragraphs.push(new Paragraph({
+        children: [new TextRun({ text: 'Skills', bold: true, size: 22 })],
+        spacing: { after: 120 },
+        alignment: 'center',
+      }));
+      paragraphs.push(new Paragraph({
+        children: [new TextRun({ text: data.skills.join(', '), size: 20 })],
+        spacing: { after: 280 },
+        alignment: 'center',
+      }));
+    }
+
+    if (data.projects.length > 0) {
+      paragraphs.push(new Paragraph({
+        children: [new TextRun({ text: 'Projects', bold: true, size: 22 })],
+        spacing: { after: 120 },
+        alignment: 'center',
+      }));
+
+      data.projects.forEach((proj) => {
+        paragraphs.push(new Paragraph({
+          children: [
+            new TextRun({ text: `${proj.title}`, bold: true, size: 20 }),
+            new TextRun({ text: ` (${proj.technologies})`, size: 20 }),
+          ],
+          spacing: { after: 60 },
+          alignment: 'center',
+        }));
+
+        if (proj.description) {
+          paragraphs.push(new Paragraph({
+            children: [new TextRun({ text: proj.description, size: 20 })],
+            spacing: { after: 160 },
+            alignment: 'center',
+          }));
+        } else {
+          paragraphs.push(new Paragraph({ spacing: { after: 160 } }));
+        }
+      });
+    }
+
+    if (data.certifications.length > 0) {
+      paragraphs.push(new Paragraph({
+        children: [new TextRun({ text: 'Certifications', bold: true, size: 22 })],
+        spacing: { after: 120 },
+        alignment: 'center',
+      }));
+
+      data.certifications.forEach((cert) => {
+        paragraphs.push(new Paragraph({
+          children: [
+            new TextRun({ text: `${cert.name}`, bold: true, size: 20 }),
+            new TextRun({ text: ` - ${cert.issuer}`, size: 20 }),
+          ],
+          spacing: { after: 60 },
+          alignment: 'center',
+        }));
+
+        if (cert.date) {
+          paragraphs.push(new Paragraph({
+            children: [new TextRun({ text: `Issued: ${formatDate(cert.date)}`, size: 20 })],
+            spacing: { after: 160 },
+            alignment: 'center',
+          }));
+        } else {
+          paragraphs.push(new Paragraph({ spacing: { after: 160 } }));
+        }
+      });
+    }
+
+    const doc = new Document({
+      sections: [{
+        children: paragraphs,
+        properties: {
+          page: {
+            margin: {
+              top: marginTwips,
+              right: marginTwips,
+              bottom: marginTwips,
+              left: marginTwips,
+            },
+          },
+        },
+      }],
+    });
+
+    Packer.toBlob(doc).then((blob) => {
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `${data.personal.firstName}_${data.personal.lastName}_Resume.docx`;
+      a.click();
+      URL.revokeObjectURL(url);
+    });
   };
 
   return (
@@ -146,37 +720,44 @@ export default function EditorPage({ params }: { params: { templateId: string } 
               <Sparkles className="w-4 h-4" />
               {t.editor.atsCheck}
             </button>
-            <div className="flex items-center gap-2">
+            <div className="relative">
               <button
-                onClick={exportPDF}
+                onClick={() => setShowExportMenu(!showExportMenu)}
                 className="flex items-center gap-2 px-4 py-2 text-sm font-medium text-white bg-primary-600 hover:bg-primary-700 rounded-lg transition-colors"
               >
                 <Download className="w-4 h-4" />
                 {t.editor.downloadPdf}
+                <ChevronDown className={`w-4 h-4 transition-transform ${showExportMenu ? 'rotate-180' : ''}`} />
               </button>
-              <details className="group relative">
-                <summary className="flex items-center gap-1 px-3 py-2 text-sm font-medium text-slate-600 hover:bg-slate-100 rounded-lg transition-colors cursor-pointer">
-                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <circle cx="12" cy="12" r="10" strokeWidth="2" />
-                    <path d="M12 16v-4M12 8h.01" strokeWidth="2" strokeLinecap="round" />
-                  </svg>
-                </summary>
-                <div className="absolute right-0 mt-2 w-80 bg-white border border-slate-200 rounded-xl shadow-xl z-50 p-4">
-                  <h4 className="font-semibold text-slate-900 mb-3">{t.editor.pdfTip.title}</h4>
-                  <p className="text-sm text-slate-600 mb-3">{t.editor.pdfTip.content}</p>
-                  <ul className="space-y-2 text-sm">
-                    <li className="flex items-start gap-2">
-                      <span className="text-primary-600 mt-0.5">•</span>
-                      <span className="text-slate-600">{t.editor.pdfTip.junior}</span>
-                    </li>
-                    <li className="flex items-start gap-2">
-                      <span className="text-primary-600 mt-0.5">•</span>
-                      <span className="text-slate-600">{t.editor.pdfTip.senior}</span>
-                    </li>
-                  </ul>
-                  <p className="text-xs text-slate-500 mt-3 pt-3 border-t border-slate-100">{t.editor.pdfTip.note}</p>
-                </div>
-              </details>
+              {showExportMenu && (
+                <>
+                  <div className="fixed inset-0 z-40" onClick={() => setShowExportMenu(false)} />
+                  <div className="absolute right-0 mt-2 w-56 bg-white border border-slate-200 rounded-xl shadow-xl z-50 py-2">
+                    <button
+                      onClick={exportPDF}
+                      className="w-full flex items-center gap-3 px-4 py-2.5 text-sm text-left hover:bg-slate-50 transition-colors"
+                    >
+                      <svg className="w-5 h-5 text-red-500" fill="currentColor" viewBox="0 0 24 24">
+                        <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8l-6-6zm-1 2l5 5h-5V4zM6 20V4h6v6h6v10H6z"/>
+                      </svg>
+                      <span className="text-slate-700">Export PDF</span>
+                    </button>
+                    <button
+                      onClick={exportDOCX}
+                      className="w-full flex items-center gap-3 px-4 py-2.5 text-sm text-left hover:bg-slate-50 transition-colors"
+                    >
+                      <svg className="w-5 h-5 text-blue-500" fill="currentColor" viewBox="0 0 24 24">
+                        <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8l-6-6zm-1 2l5 5h-5V4zM6 20V4h6v6h6v10H6z"/>
+                      </svg>
+                      <span className="text-slate-700">Export DOCX</span>
+                    </button>
+                    <div className="border-t border-slate-100 my-2" />
+                    <div className="px-4 pb-2">
+                      <p className="text-xs text-slate-500">{t.editor.pdfTip.note}</p>
+                    </div>
+                  </div>
+                </>
+              )}
             </div>
           </div>
         </div>
@@ -213,28 +794,26 @@ export default function EditorPage({ params }: { params: { templateId: string } 
           </div>
         </div>
 
-        {/* Middle - Editor */}
-        <div className="flex-1 overflow-y-auto bg-slate-50 p-6">
-          <div className="max-w-2xl mx-auto">
-            <EditorSection
-              activeSection={activeSection}
-              data={data}
-              updateData={updateData}
-              t={t}
-            />
-          </div>
+        {/* Middle - Editor - Narrower */}
+        <div className="w-96 bg-slate-50 overflow-y-auto p-4 flex-shrink-0">
+          <EditorSection
+            activeSection={activeSection}
+            data={data}
+            updateData={updateData}
+            t={t}
+          />
         </div>
 
-        {/* Right - Preview */}
-        <div className="w-[450px] bg-white border-l overflow-y-auto flex-shrink-0">
+        {/* Right - Preview - Wider */}
+        <div className="flex-1 bg-white border-l overflow-y-auto">
           <div className="sticky top-0 bg-white border-b px-4 py-3 flex items-center justify-between">
             <span className="text-sm font-medium text-slate-700">{t.editor.preview}</span>
           </div>
           <div className="p-6 bg-slate-200">
             <div
               ref={resumeRef}
-              className="bg-white shadow-lg"
-              style={{ minHeight: "1056px", width: "100%" }}
+              className="bg-white shadow-lg mx-auto"
+              style={{ minHeight: "1056px", width: "816px" }}
             >
               <ResumeTemplate data={data} template={template} />
             </div>
@@ -346,15 +925,15 @@ function EditorSection({
       return (
         <div className="space-y-4">
           <h2 className="text-lg font-bold text-slate-900 mb-4">{t.editor.sections.personal}</h2>
-          <Input label={t.editor.labels.firstName} value={data.personal.firstName} onChange={(v) => updateData({ personal: { ...data.personal, firstName: v } })} />
-          <Input label={t.editor.labels.lastName} value={data.personal.lastName} onChange={(v) => updateData({ personal: { ...data.personal, lastName: v } })} />
-          <Input label={t.editor.labels.jobTitle} value={data.personal.jobTitle} onChange={(v) => updateData({ personal: { ...data.personal, jobTitle: v } })} />
-          <Input label={t.editor.labels.email} value={data.personal.email} onChange={(v) => updateData({ personal: { ...data.personal, email: v } })} />
-          <Input label={t.editor.labels.phone} value={data.personal.phone} onChange={(v) => updateData({ personal: { ...data.personal, phone: v } })} />
-          <Input label={t.editor.labels.location} value={data.personal.location} onChange={(v) => updateData({ personal: { ...data.personal, location: v } })} />
-          <Input label={t.editor.labels.linkedin} value={data.personal.linkedin} onChange={(v) => updateData({ personal: { ...data.personal, linkedin: v } })} />
-          <Input label={t.editor.labels.github} value={data.personal.github} onChange={(v) => updateData({ personal: { ...data.personal, github: v } })} />
-          <TextArea label={t.editor.labels.summary} value={data.summary} onChange={(v) => updateData({ summary: v })} />
+          <Input label={t.editor.labels.firstName} value={data.personal.firstName} onChange={(v: string) => updateData({ personal: { ...data.personal, firstName: v } })} />
+          <Input label={t.editor.labels.lastName} value={data.personal.lastName} onChange={(v: string) => updateData({ personal: { ...data.personal, lastName: v } })} />
+          <Input label={t.editor.labels.jobTitle} value={data.personal.jobTitle} onChange={(v: string) => updateData({ personal: { ...data.personal, jobTitle: v } })} />
+          <Input label={t.editor.labels.email} value={data.personal.email} onChange={(v: string) => updateData({ personal: { ...data.personal, email: v } })} />
+          <Input label={t.editor.labels.phone} value={data.personal.phone} onChange={(v: string) => updateData({ personal: { ...data.personal, phone: v } })} />
+          <Input label={t.editor.labels.location} value={data.personal.location} onChange={(v: string) => updateData({ personal: { ...data.personal, location: v } })} />
+          <Input label={t.editor.labels.linkedin} value={data.personal.linkedin} onChange={(v: string) => updateData({ personal: { ...data.personal, linkedin: v } })} />
+          <Input label={t.editor.labels.github} value={data.personal.github} onChange={(v: string) => updateData({ personal: { ...data.personal, github: v } })} />
+          <TextArea label={t.editor.labels.summary} value={data.summary} onChange={(v: string) => updateData({ summary: v })} />
         </div>
       );
 
@@ -426,13 +1005,13 @@ function ExperienceEditor({ data, updateData, t }: any) {
             </button>
           </div>
           <div className="grid grid-cols-2 gap-4">
-            <Input label={t.editor.labels.company} value={exp.company} onChange={(v) => updateExp(i, "company", v)} />
-            <Input label={t.editor.labels.position} value={exp.position} onChange={(v) => updateExp(i, "position", v)} />
-            <Input label={t.editor.labels.location} value={exp.location} onChange={(v) => updateExp(i, "location", v)} />
+            <Input label={t.editor.labels.company} value={exp.company} onChange={(v: string) => updateExp(i, "company", v)} />
+            <Input label={t.editor.labels.position} value={exp.position} onChange={(v: string) => updateExp(i, "position", v)} />
+            <Input label={t.editor.labels.location} value={exp.location} onChange={(v: string) => updateExp(i, "location", v)} />
           </div>
           <div className="grid grid-cols-2 gap-4">
-            <Input label={t.editor.labels.startDate} type="month" value={exp.startDate} onChange={(v) => updateExp(i, "startDate", v)} />
-            <Input label={t.editor.labels.endDate} type="month" value={exp.endDate} onChange={(v) => updateExp(i, "endDate", v)} />
+            <Input label={t.editor.labels.startDate} type="month" value={exp.startDate} onChange={(v: string) => updateExp(i, "startDate", v)} />
+            <Input label={t.editor.labels.endDate} type="month" value={exp.endDate} onChange={(v: string) => updateExp(i, "endDate", v)} />
           </div>
           <label className="flex items-center gap-2 text-sm text-slate-700">
             <input
@@ -445,7 +1024,7 @@ function ExperienceEditor({ data, updateData, t }: any) {
           <TextArea
             label={t.editor.labels.description}
             value={exp.description.join("\n")}
-            onChange={(v) => updateExp(i, "description", v.split("\n").filter((x: string) => x))}
+            onChange={(v: string) => updateExp(i, "description", v.split("\n").filter((x: string) => x))}
           />
         </div>
       ))}
@@ -497,16 +1076,16 @@ function EducationEditor({ data, updateData, t }: any) {
               <Trash2 className="w-4 h-4" />
             </button>
           </div>
-          <Input label={t.editor.labels.school} value={edu.school} onChange={(v) => updateEdu(i, "school", v)} />
+          <Input label={t.editor.labels.school} value={edu.school} onChange={(v: string) => updateEdu(i, "school", v)} />
           <div className="grid grid-cols-2 gap-4">
-            <Input label={t.editor.labels.degree} value={edu.degree} onChange={(v) => updateEdu(i, "degree", v)} />
-            <Input label={t.editor.labels.field} value={edu.field} onChange={(v) => updateEdu(i, "field", v)} />
+            <Input label={t.editor.labels.degree} value={edu.degree} onChange={(v: string) => updateEdu(i, "degree", v)} />
+            <Input label={t.editor.labels.field} value={edu.field} onChange={(v: string) => updateEdu(i, "field", v)} />
           </div>
           <div className="grid grid-cols-2 gap-4">
-            <Input label={t.editor.labels.startDate} type="month" value={edu.startDate} onChange={(v) => updateEdu(i, "startDate", v)} />
-            <Input label={t.editor.labels.endDate} type="month" value={edu.endDate} onChange={(v) => updateEdu(i, "endDate", v)} />
+            <Input label={t.editor.labels.startDate} type="month" value={edu.startDate} onChange={(v: string) => updateEdu(i, "startDate", v)} />
+            <Input label={t.editor.labels.endDate} type="month" value={edu.endDate} onChange={(v: string) => updateEdu(i, "endDate", v)} />
           </div>
-          <Input label={t.editor.labels.gpa} value={edu.gpa} onChange={(v) => updateEdu(i, "gpa", v)} />
+          <Input label={t.editor.labels.gpa} value={edu.gpa} onChange={(v: string) => updateEdu(i, "gpa", v)} />
         </div>
       ))}
     </div>
@@ -595,10 +1174,10 @@ function ProjectsEditor({ data, updateData, t }: any) {
               <Trash2 className="w-4 h-4" />
             </button>
           </div>
-          <Input label={t.editor.labels.projectTitle} value={proj.title} onChange={(v) => updateProj(i, "title", v)} />
-          <TextArea label={t.editor.labels.description} value={proj.description} onChange={(v) => updateProj(i, "description", v)} />
-          <Input label={t.editor.labels.technologies} value={proj.technologies.join(", ")} onChange={(v) => updateProj(i, "technologies", v.split(",").map((x: string) => x.trim()))} />
-          <Input label={t.editor.labels.link} value={proj.link} onChange={(v) => updateProj(i, "link", v)} />
+          <Input label={t.editor.labels.projectTitle} value={proj.title} onChange={(v: string) => updateProj(i, "title", v)} />
+          <TextArea label={t.editor.labels.description} value={proj.description} onChange={(v: string) => updateProj(i, "description", v)} />
+          <Input label={t.editor.labels.technologies} value={proj.technologies.join(", ")} onChange={(v: string) => updateProj(i, "technologies", v.split(",").map((x: string) => x.trim()))} />
+          <Input label={t.editor.labels.link} value={proj.link} onChange={(v: string) => updateProj(i, "link", v)} />
         </div>
       ))}
     </div>
@@ -646,11 +1225,11 @@ function CertificationsEditor({ data, updateData, t }: any) {
               <Trash2 className="w-4 h-4" />
             </button>
           </div>
-          <Input label={t.editor.labels.certificationName} value={cert.name} onChange={(v) => updateCert(i, "name", v)} />
-          <Input label={t.editor.labels.issuer} value={cert.issuer} onChange={(v) => updateCert(i, "issuer", v)} />
-          <Input label={t.editor.labels.date} type="month" value={cert.date} onChange={(v) => updateCert(i, "date", v)} />
-          <Input label={t.editor.labels.credentialId} value={cert.credentialId} onChange={(v) => updateCert(i, "credentialId", v)} />
-          <Input label={t.editor.labels.link} value={cert.link} onChange={(v) => updateCert(i, "link", v)} />
+          <Input label={t.editor.labels.certificationName} value={cert.name} onChange={(v: string) => updateCert(i, "name", v)} />
+          <Input label={t.editor.labels.issuer} value={cert.issuer} onChange={(v: string) => updateCert(i, "issuer", v)} />
+          <Input label={t.editor.labels.date} type="month" value={cert.date} onChange={(v: string) => updateCert(i, "date", v)} />
+          <Input label={t.editor.labels.credentialId} value={cert.credentialId} onChange={(v: string) => updateCert(i, "credentialId", v)} />
+          <Input label={t.editor.labels.link} value={cert.link} onChange={(v: string) => updateCert(i, "link", v)} />
         </div>
       ))}
     </div>
@@ -703,141 +1282,162 @@ function ResumeTemplate({ data, template }: { data: ResumeData; template: any })
   const colorScheme = colors[template.colorScheme] || colors.blue;
 
   return (
-    <div className="p-8 text-slate-900">
-      <div className="text-center border-b-2 pb-6 mb-6" style={{ borderColor: colorScheme.primary }}>
-        <h1 className="text-3xl font-bold mb-2" style={{ color: colorScheme.primary }}>
-          {data.personal.firstName} {data.personal.lastName}
-        </h1>
-        <p className="text-lg text-slate-700 mb-3">{data.personal.jobTitle}</p>
-        <div className="flex flex-wrap justify-center gap-x-4 gap-y-1 text-sm text-slate-600">
-          <span>{data.personal.location}</span>
-          <span>{data.personal.email}</span>
-          <span>{data.personal.phone}</span>
-          {data.personal.linkedin && <span>{data.personal.linkedin}</span>}
-          {data.personal.github && <span>{data.personal.github}</span>}
-        </div>
-      </div>
-
-      {data.summary && (
-        <div className="mb-6">
-          <h2 className="text-lg font-bold mb-2" style={{ color: colorScheme.primary }}>
-            Professional Summary
-          </h2>
-          <p className="text-slate-700">{data.summary}</p>
-        </div>
-      )}
-
-      {data.experience.length > 0 && (
-        <div className="mb-6">
-          <h2 className="text-lg font-bold mb-3" style={{ color: colorScheme.primary }}>
-            Experience
-          </h2>
-          {data.experience.map((exp) => (
-            <div key={exp.id} className="mb-4">
-              <div className="flex justify-between items-start mb-1">
-                <div>
-                  <div className="font-semibold text-slate-900">{exp.position}</div>
-                  <div className="text-slate-700">{exp.company}</div>
-                </div>
-                <div className="text-right text-sm text-slate-600">
-                  {exp.location}
-                  <div>
-                    {formatDate(exp.startDate)} - {exp.isCurrent ? "Present" : formatDate(exp.endDate)}
-                  </div>
-                </div>
-              </div>
-              <ul className="list-disc list-inside mt-2 text-slate-700 text-sm space-y-1">
-                {exp.description.map((item, i) => (
-                  <li key={i}>{item}</li>
-                ))}
-              </ul>
-            </div>
-          ))}
-        </div>
-      )}
-
-      {data.education.length > 0 && (
-        <div className="mb-6">
-          <h2 className="text-lg font-bold mb-3" style={{ color: colorScheme.primary }}>
-            Education
-          </h2>
-          {data.education.map((edu) => (
-            <div key={edu.id} className="mb-3">
-              <div className="flex justify-between items-start mb-1">
-                <div>
-                  <div className="font-semibold text-slate-900">{edu.school}</div>
-                  <div className="text-slate-700">
-                    {edu.degree} in {edu.field}
-                  </div>
-                </div>
-                <div className="text-right text-sm text-slate-600">
-                  {edu.location}
-                  <div>
-                    {formatDate(edu.startDate)} - {formatDate(edu.endDate)}
-                  </div>
-                </div>
-              </div>
-              {edu.gpa && <div className="text-sm text-slate-600">GPA: {edu.gpa}</div>}
-            </div>
-          ))}
-        </div>
-      )}
-
-      {data.skills.length > 0 && (
-        <div className="mb-6">
-          <h2 className="text-lg font-bold mb-3" style={{ color: colorScheme.primary }}>
-            Skills
-          </h2>
-          <div className="flex flex-wrap gap-2">
-            {data.skills.map((skill, i) => (
-              <span key={i} className="px-3 py-1 rounded text-sm" style={{ backgroundColor: colorScheme.secondary }}>
-                {skill}
-              </span>
-            ))}
+    <div
+      id="resume-container"
+      className="text-slate-900"
+      style={{
+        width: '210mm',
+        minHeight: '297mm',
+        padding: '20mm',
+        boxSizing: 'border-box',
+        backgroundColor: '#ffffff',
+        fontSize: '11pt',
+        lineHeight: '1.45',
+        fontFamily: 'Arial, Helvetica, sans-serif',
+        overflow: 'hidden',
+        position: 'relative',
+      }}
+    >
+      <div style={{ width: '100%', maxWidth: '180mm', margin: '0 auto', overflow: 'hidden' }}>
+        <div className="text-center border-b-2 pb-5 mb-5" style={{ borderColor: colorScheme.primary }}>
+          <h1 className="font-bold mb-2" style={{ fontSize: '16pt', color: colorScheme.primary }}>
+            {data.personal.firstName} {data.personal.lastName}
+          </h1>
+          <p className="mb-2" style={{ fontSize: '12pt', color: '#64748b' }}>{data.personal.jobTitle}</p>
+          <div className="flex flex-wrap justify-center gap-x-4 gap-y-1 text-sm" style={{ color: '#64748b', fontSize: '10pt', overflow: 'hidden' }}>
+            <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{data.personal.location}</span>
+            <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{data.personal.email}</span>
+            <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{data.personal.phone}</span>
+            {data.personal.linkedin && <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{data.personal.linkedin}</span>}
+            {data.personal.github && <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{data.personal.github}</span>}
           </div>
         </div>
-      )}
 
-      {data.projects.length > 0 && (
-        <div className="mb-6">
-          <h2 className="text-lg font-bold mb-3" style={{ color: colorScheme.primary }}>
-            Projects
-          </h2>
-          {data.projects.map((proj) => (
-            <div key={proj.id} className="mb-3">
-              <div className="flex justify-between items-start mb-1">
-                <div className="font-semibold text-slate-900">{proj.title}</div>
-                {proj.link && <a href={proj.link} className="text-sm" style={{ color: colorScheme.primary }}>Link</a>}
-              </div>
-              <p className="text-sm text-slate-700 mb-1">{proj.description}</p>
-              {proj.technologies.length > 0 && (
-                <div className="flex flex-wrap gap-1">
-                  {proj.technologies.map((tech, i) => (
-                    <span key={i} className="text-xs px-2 py-0.5 bg-slate-100 text-slate-600 rounded">
-                      {tech}
-                    </span>
-                  ))}
+        {data.summary && (
+          <div className="mb-5" style={{ pageBreakInside: 'avoid' }}>
+            <h2 className="font-bold mb-2" style={{ fontSize: '12pt', color: colorScheme.primary }}>
+              Professional Summary
+            </h2>
+            <p style={{ color: '#475569', fontSize: '11pt', lineHeight: '1.45' }}>{data.summary}</p>
+          </div>
+        )}
+
+        {data.experience.length > 0 && (
+          <div className="mb-5" style={{ pageBreakInside: 'avoid' }}>
+            <h2 className="font-bold mb-2" style={{ fontSize: '12pt', color: colorScheme.primary }}>
+              Experience
+            </h2>
+            {data.experience.map((exp) => (
+              <div key={exp.id} className="mb-4">
+                <div className="flex justify-between items-start mb-1" style={{ width: '100%', display: 'flex' }}>
+                  <div style={{ flex: 1, overflow: 'hidden' }}>
+                    <div className="font-semibold" style={{ color: '#1e293b', fontSize: '11pt', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{exp.position}</div>
+                    <div style={{ color: '#475569', fontSize: '11pt', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{exp.company}</div>
+                  </div>
+                  <div className="text-right" style={{ width: '180px', flexShrink: 0, overflow: 'hidden', textAlign: 'right' }}>
+                    <div style={{ color: '#64748b', fontSize: '10pt', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{exp.location}</div>
+                    <div style={{ color: '#64748b', fontSize: '10pt', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                      {formatDate(exp.startDate)} - {exp.isCurrent ? "Present" : formatDate(exp.endDate)}
+                    </div>
+                  </div>
                 </div>
-              )}
-            </div>
-          ))}
-        </div>
-      )}
+                <ul className="list-disc list-inside mt-2 space-y-1" style={{ fontSize: '10pt', lineHeight: '1.4', color: '#475569', paddingLeft: '0', marginLeft: '0' }}>
+                  {exp.description.map((item, i) => (
+                    <li key={i} style={{ wordBreak: 'break-word', overflow: 'hidden' }}>{item}</li>
+                  ))}
+                </ul>
+              </div>
+            ))}
+          </div>
+        )}
 
-      {data.certifications.length > 0 && (
-        <div className="mb-6">
-          <h2 className="text-lg font-bold mb-3" style={{ color: colorScheme.primary }}>
-            Certifications
-          </h2>
-          {data.certifications.map((cert) => (
-            <div key={cert.id} className="mb-2">
-              <div className="font-semibold text-slate-900">{cert.name}</div>
-              <div className="text-sm text-slate-700">{cert.issuer}</div>
-              {cert.date && <div className="text-xs text-slate-500">{formatDate(cert.date)}</div>}
+      {data.education.length > 0 && (
+          <div className="mb-5" style={{ pageBreakInside: 'avoid' }}>
+            <h2 className="font-bold mb-2" style={{ fontSize: '12pt', color: colorScheme.primary }}>
+              Education
+            </h2>
+            {data.education.map((edu) => (
+              <div key={edu.id} className="mb-3">
+                <div className="flex justify-between items-start mb-1" style={{ width: '100%', display: 'flex' }}>
+                  <div style={{ flex: 1, overflow: 'hidden' }}>
+                    <div className="font-semibold" style={{ color: '#1e293b', fontSize: '11pt', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{edu.school}</div>
+                    <div style={{ color: '#475569', fontSize: '11pt', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                      {edu.degree} in {edu.field}
+                    </div>
+                  </div>
+                  <div className="text-right" style={{ width: '180px', flexShrink: 0, overflow: 'hidden', textAlign: 'right' }}>
+                    <div style={{ color: '#64748b', fontSize: '10pt', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{edu.location}</div>
+                    <div style={{ color: '#64748b', fontSize: '10pt', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                      {formatDate(edu.startDate)} - {formatDate(edu.endDate)}
+                    </div>
+                  </div>
+                </div>
+                {edu.gpa && <div className="text-sm" style={{ color: '#64748b', fontSize: '10pt', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>GPA: {edu.gpa}</div>}
+              </div>
+            ))}
+          </div>
+        )}
+
+        {data.skills.length > 0 && (
+          <div className="mb-5" style={{ pageBreakInside: 'avoid' }}>
+            <h2 className="font-bold mb-2" style={{ fontSize: '12pt', color: colorScheme.primary }}>
+              Skills
+            </h2>
+            <div className="flex flex-wrap gap-2">
+              {data.skills.map((skill, i) => (
+                <span key={i} className="px-2 py-1 rounded text-sm" style={{ backgroundColor: colorScheme.secondary, fontSize: '10pt', color: '#475569' }}>
+                  {skill}
+                </span>
+              ))}
             </div>
-          ))}
-        </div>
-      )}
+          </div>
+        )}
+
+        {data.projects.length > 0 && (
+          <div className="mb-5" style={{ pageBreakInside: 'avoid' }}>
+            <h2 className="font-bold mb-2" style={{ fontSize: '12pt', color: colorScheme.primary }}>
+              Projects
+            </h2>
+            {data.projects.map((proj) => (
+              <div key={proj.id} className="mb-3">
+                <div className="flex justify-between items-start mb-1" style={{ width: '100%', display: 'flex' }}>
+                  <div style={{ flex: 1, overflow: 'hidden' }}>
+                    <div className="font-semibold" style={{ color: '#1e293b', fontSize: '11pt', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{proj.title}</div>
+                  </div>
+                  <div style={{ width: '80px', flexShrink: 0, overflow: 'hidden', textAlign: 'right' }}>
+                    {proj.link && <a href={proj.link} className="text-sm" style={{ color: colorScheme.primary, fontSize: '10pt', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>Link</a>}
+                  </div>
+                </div>
+                <p className="mb-1" style={{ fontSize: '10pt', color: '#475569', wordBreak: 'break-word', overflow: 'hidden' }}>{proj.description}</p>
+                {proj.technologies.length > 0 && (
+                  <div className="flex flex-wrap gap-1" style={{ overflow: 'hidden' }}>
+                    {proj.technologies.map((tech, i) => (
+                      <span key={i} className="px-2 py-0.5 bg-slate-100 text-slate-600 rounded" style={{ fontSize: '9pt' }}>
+                        {tech}
+                      </span>
+                    ))}
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
+        )}
+
+        {data.certifications.length > 0 && (
+          <div className="mb-5" style={{ pageBreakInside: 'avoid' }}>
+            <h2 className="font-bold mb-2" style={{ fontSize: '12pt', color: colorScheme.primary }}>
+              Certifications
+            </h2>
+            {data.certifications.map((cert) => (
+              <div key={cert.id} className="mb-2">
+                <div className="font-semibold" style={{ color: '#1e293b', fontSize: '11pt', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{cert.name}</div>
+                <div className="text-sm" style={{ color: '#475569', fontSize: '10pt', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{cert.issuer}</div>
+                {cert.date && <div className="text-xs" style={{ color: '#94a3b8', fontSize: '9pt', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{formatDate(cert.date)}</div>}
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
     </div>
   );
 }
